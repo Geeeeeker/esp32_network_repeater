@@ -334,6 +334,136 @@ static httpd_uri_t config_post = {
     .handler   = config_post_handler,
 };
 
+/* WiFi扫描处理器 - 扫描附近的WiFi网络并返回JSON结果 */
+static esp_err_t wifi_scan_handler(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "WiFi scan requested");
+
+    wifi_scan_config_t scan_config = {
+        .ssid = NULL,
+        .bssid = NULL,
+        .channel = 0,
+        .show_hidden = false,
+        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+        .scan_time.active.min = 100,
+        .scan_time.active.max = 300,
+    };
+
+    esp_err_t err = esp_wifi_scan_start(&scan_config, true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi scan failed: %s", esp_err_to_name(err));
+        cJSON *response = cJSON_CreateObject();
+        cJSON_AddBoolToObject(response, "success", false);
+        cJSON_AddStringToObject(response, "error", esp_err_to_name(err));
+        char *response_string = cJSON_Print(response);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, response_string, strlen(response_string));
+        free(response_string);
+        cJSON_Delete(response);
+        return ESP_OK;
+    }
+
+    uint16_t ap_count = 0;
+    esp_wifi_scan_get_ap_num(&ap_count);
+    if (ap_count > 32) {
+        ap_count = 32;
+    }
+
+    wifi_ap_record_t *ap_records = NULL;
+    if (ap_count > 0) {
+        ap_records = (wifi_ap_record_t *)malloc(sizeof(wifi_ap_record_t) * ap_count);
+        if (ap_records == NULL) {
+            ESP_LOGE(TAG, "Failed to allocate memory for scan results");
+            uint16_t dummy = 0;
+            esp_wifi_scan_get_ap_records(&dummy, NULL);
+            cJSON *response = cJSON_CreateObject();
+            cJSON_AddBoolToObject(response, "success", false);
+            cJSON_AddStringToObject(response, "error", "Out of memory");
+            char *response_string = cJSON_Print(response);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_send(req, response_string, strlen(response_string));
+            free(response_string);
+            cJSON_Delete(response);
+            return ESP_OK;
+        }
+        esp_wifi_scan_get_ap_records(&ap_count, ap_records);
+    }
+
+    // 按RSSI降序排序
+    for (int i = 0; i < ap_count - 1; i++) {
+        for (int j = i + 1; j < ap_count; j++) {
+            if (ap_records[j].rssi > ap_records[i].rssi) {
+                wifi_ap_record_t tmp = ap_records[i];
+                ap_records[i] = ap_records[j];
+                ap_records[j] = tmp;
+            }
+        }
+    }
+
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "success", true);
+    cJSON *networks = cJSON_AddArrayToObject(response, "networks");
+
+    // 去重：跳过已出现的SSID（已按RSSI排序，第一次出现的即为最强信号）
+    for (int i = 0; i < ap_count; i++) {
+        if (strlen((char *)ap_records[i].ssid) == 0) continue;
+
+        // 检查是否已添加过相同SSID
+        bool duplicate = false;
+        for (int j = 0; j < i; j++) {
+            if (strcmp((char *)ap_records[i].ssid, (char *)ap_records[j].ssid) == 0) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) continue;
+
+        cJSON *network = cJSON_CreateObject();
+        cJSON_AddStringToObject(network, "ssid", (char *)ap_records[i].ssid);
+        cJSON_AddNumberToObject(network, "rssi", ap_records[i].rssi);
+        cJSON_AddNumberToObject(network, "channel", ap_records[i].primary);
+
+        const char *auth_str;
+        switch (ap_records[i].authmode) {
+            case WIFI_AUTH_OPEN:            auth_str = "OPEN"; break;
+            case WIFI_AUTH_WEP:             auth_str = "WEP"; break;
+            case WIFI_AUTH_WPA_PSK:         auth_str = "WPA"; break;
+            case WIFI_AUTH_WPA2_PSK:        auth_str = "WPA2"; break;
+            case WIFI_AUTH_WPA_WPA2_PSK:    auth_str = "WPA/WPA2"; break;
+            case WIFI_AUTH_WPA3_PSK:        auth_str = "WPA3"; break;
+            case WIFI_AUTH_WPA2_WPA3_PSK:   auth_str = "WPA2/WPA3"; break;
+            case WIFI_AUTH_WPA2_ENTERPRISE: auth_str = "Enterprise"; break;
+            default:                        auth_str = "OTHER"; break;
+        }
+        cJSON_AddStringToObject(network, "auth", auth_str);
+
+        const char *band = (ap_records[i].primary <= 14) ? "2.4GHz" : "5GHz";
+        cJSON_AddStringToObject(network, "band", band);
+
+        cJSON_AddItemToArray(networks, network);
+    }
+
+    char *response_string = cJSON_Print(response);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, response_string, strlen(response_string));
+
+    free(response_string);
+    cJSON_Delete(response);
+    free(ap_records);
+
+    ESP_LOGI(TAG, "WiFi scan complete, found %d networks", ap_count);
+    return ESP_OK;
+}
+
+static httpd_uri_t wifi_scan = {
+    .uri       = "/scan",
+    .method    = HTTP_GET,
+    .handler   = wifi_scan_handler,
+};
+
 /* 强制门户重定向处理器 */
 static esp_err_t captive_portal_handler(httpd_req_t *req)
 {
@@ -610,6 +740,7 @@ httpd_handle_t start_webserver(void)
 {
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.max_uri_handlers = 16;
 
     esp_timer_create(&restart_timer_args, &restart_timer);
 
@@ -632,6 +763,9 @@ httpd_handle_t start_webserver(void)
         httpd_register_uri_handler(server, &library_test);    // iOS
         httpd_register_uri_handler(server, &ncsi_txt);        // Windows
         httpd_register_uri_handler(server, &connecttest);     // Windows 10
+
+        // WiFi扫描
+        httpd_register_uri_handler(server, &wifi_scan);
 
         // 注册强制门户通配符处理器（必须最后注册）
         httpd_register_uri_handler(server, &captive_portal);

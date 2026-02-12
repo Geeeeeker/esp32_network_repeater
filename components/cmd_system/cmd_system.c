@@ -16,6 +16,8 @@
 #include "esp_sleep.h"
 #include "esp_flash.h"
 #include "esp_chip_info.h"
+#include "soc/soc_caps.h"
+#include "driver/gpio.h"
 #include "driver/rtc_io.h"
 #include "driver/uart.h"
 #include "argtable3/argtable3.h"
@@ -202,7 +204,7 @@ static int deep_sleep(int argc, char **argv)
     }
     if (deep_sleep_args.wakeup_gpio_num->count) {
         int io_num = deep_sleep_args.wakeup_gpio_num->ival[0];
-        if (!GPIO_IS_VALID_DIGITAL_IO_PAD(io_num)) {
+        if (!((1ULL << io_num) & SOC_GPIO_VALID_DIGITAL_IO_PAD_MASK)) {
             ESP_LOGE(TAG, "GPIO %d is not an RTC IO", io_num);
             return 1;
         }

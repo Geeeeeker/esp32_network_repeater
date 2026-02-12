@@ -180,6 +180,80 @@
             margin-top: 5px;
         }
         
+        .scan-btn {
+            width: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 15px;
+        }
+
+        .scan-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .scan-btn:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .network-list {
+            max-height: 300px;
+            overflow-y: auto;
+            margin-bottom: 15px;
+            display: none;
+        }
+
+        .network-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border: 1px solid #e1e1e1;
+            border-radius: 8px;
+            margin-bottom: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            background: #fafafa;
+        }
+
+        .network-item:hover {
+            border-color: #667eea;
+            background: #f0f0ff;
+        }
+
+        .network-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .network-ssid {
+            font-weight: 600;
+            color: #333;
+            font-size: 14px;
+        }
+
+        .network-details {
+            font-size: 11px;
+            color: #888;
+            margin-top: 2px;
+        }
+
+        .signal-icon {
+            font-size: 14px;
+            margin-left: 10px;
+            letter-spacing: 1px;
+            color: #667eea;
+        }
+
         @media (max-width: 480px) {
             .container {
                 margin: 10px;
@@ -215,11 +289,15 @@
             <form id="configForm">
                 <div class="section">
                     <h3>上游网络设置</h3>
+                    <button type="button" class="scan-btn" id="scanBtn" onclick="scanNetworks()">
+                        扫描附近的 Wi-Fi 网络
+                    </button>
+                    <div class="network-list" id="networkList"></div>
                     <div class="form-group">
                         <label for="sta_ssid">网络名称 (SSID) *</label>
-                        <input type="text" id="sta_ssid" name="sta_ssid" required maxlength="31" 
+                        <input type="text" id="sta_ssid" name="sta_ssid" required maxlength="31"
                                placeholder="输入要连接的Wi-Fi名称">
-                        <div class="help-text">请输入您要连接的Wi-Fi网络名称</div>
+                        <div class="help-text">点击上方扫描按钮选择网络，或手动输入</div>
                     </div>
                     <div class="form-group">
                         <label for="sta_password">网络密码</label>
@@ -347,6 +425,87 @@
             submitBtn.disabled = false;
         }
         
+        // WiFi扫描功能
+        function scanNetworks() {
+            var scanBtn = document.getElementById('scanBtn');
+            var networkList = document.getElementById('networkList');
+
+            scanBtn.innerHTML = '<span class="loading"></span>正在扫描...';
+            scanBtn.disabled = true;
+            networkList.style.display = 'none';
+            networkList.innerHTML = '';
+
+            fetch('/scan')
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    scanBtn.innerHTML = '扫描附近的 Wi-Fi 网络';
+                    scanBtn.disabled = false;
+
+                    if (data.success && data.networks && data.networks.length > 0) {
+                        networkList.innerHTML = '';
+                        data.networks.forEach(function(net) {
+                            var item = document.createElement('div');
+                            item.className = 'network-item';
+                            item.onclick = function() { selectNetwork(net.ssid, net.auth); };
+
+                            var signal;
+                            if (net.rssi >= -50) signal = '\u2582\u2584\u2586\u2588';
+                            else if (net.rssi >= -60) signal = '\u2582\u2584\u2586';
+                            else if (net.rssi >= -70) signal = '\u2582\u2584';
+                            else signal = '\u2582';
+
+                            var lock = (net.auth !== 'OPEN') ? ' \uD83D\uDD12' : '';
+
+                            item.innerHTML =
+                                '<div class="network-info">' +
+                                    '<div class="network-ssid">' + escapeHtml(net.ssid) + lock + '</div>' +
+                                    '<div class="network-details">' +
+                                        net.auth + ' | ' + net.band + ' | Ch.' + net.channel +
+                                        ' | ' + net.rssi + 'dBm' +
+                                    '</div>' +
+                                '</div>' +
+                                '<div class="signal-icon">' + signal + '</div>';
+
+                            networkList.appendChild(item);
+                        });
+                        networkList.style.display = 'block';
+                    } else if (data.success) {
+                        networkList.innerHTML = '<div style="text-align:center;color:#888;padding:15px;">未发现附近的 Wi-Fi 网络</div>';
+                        networkList.style.display = 'block';
+                    } else {
+                        showMessage('扫描失败: ' + (data.error || '未知错误'), 'error');
+                    }
+                })
+                .catch(function(error) {
+                    scanBtn.innerHTML = '扫描附近的 Wi-Fi 网络';
+                    scanBtn.disabled = false;
+                    showMessage('扫描请求失败: ' + error.message, 'error');
+                });
+        }
+
+        function selectNetwork(ssid, auth) {
+            document.getElementById('sta_ssid').value = ssid;
+            var pwd = document.getElementById('sta_password');
+            if (auth === 'OPEN') {
+                pwd.value = '';
+                pwd.placeholder = '开放网络，无需密码';
+            } else {
+                pwd.placeholder = '输入Wi-Fi密码';
+            }
+            pwd.focus();
+            document.getElementById('networkList').style.display = 'none';
+            showMessage('已选择网络: ' + ssid, 'success');
+            setTimeout(function() {
+                document.getElementById('statusMessage').style.display = 'none';
+            }, 2000);
+        }
+
+        function escapeHtml(text) {
+            var div = document.createElement('div');
+            div.appendChild(document.createTextNode(text));
+            return div.innerHTML;
+        }
+
         // MAC地址输入格式化
         document.getElementById('ap_mac').addEventListener('input', function(e) {
             let value = e.target.value.replace(/[^0-9A-Fa-f]/g, '');
