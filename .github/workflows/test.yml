@@ -36,8 +36,9 @@ jobs:
           target: ${{ github.event.inputs.target || 'esp32' }}
           path: .
           command: |
-            # 强制重置目标芯片，覆盖已有的 sdkconfig
-            idf.py set-target -f ${{ github.event.inputs.target || 'esp32' }}
+            # 删除旧的目标配置文件，避免冲突
+            rm -f sdkconfig
+            # 构建系统会根据环境变量 IDF_TARGET 自动生成新的 sdkconfig
             idf.py build
 
       - name: Upload firmware artifacts
