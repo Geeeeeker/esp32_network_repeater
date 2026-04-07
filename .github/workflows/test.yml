@@ -5,8 +5,20 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
-  # 允许手动触发
   workflow_dispatch:
+    inputs:
+      target:
+        description: 'ESP32 chip target'
+        required: true
+        default: 'esp32'
+        type: choice
+        options:
+          - esp32
+          - esp32s2
+          - esp32s3
+          - esp32c3
+          - esp32c5
+          - esp32c6
 
 jobs:
   build:
@@ -15,24 +27,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          submodules: 'recursive'  # 如果仓库有子模块，递归拉取
+          submodules: 'recursive'
 
       - name: Build with ESP-IDF
         uses: espressif/esp-idf-ci-action@v1
         with:
-          # 使用 ESP-IDF 版本 v5.4（与项目推荐版本一致）
           esp_idf_version: v5.4
-          # 目标芯片为 ESP32
-          target: esp32
-          # 项目根目录（默认即为 .）
+          target: ${{ github.event.inputs.target || 'esp32' }}
           path: .
-          # 构建命令
-          command: idf.py build
+          command: |
+            # 强制重置目标芯片，覆盖已有的 sdkconfig
+            idf.py set-target -f ${{ github.event.inputs.target || 'esp32' }}
+            idf.py build
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: esp32-network-repeater-firmware
+          name: esp32-network-repeater-firmware-${{ github.event.inputs.target || 'esp32' }}
           path: |
             build/*.bin
             build/bootloader/*.bin
