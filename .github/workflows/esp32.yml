@@ -1,0 +1,53 @@
+name: Build ESP32 Network Repeater Firmware (ESP32)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'ESP32 chip target'
+        required: true
+        default: 'esp32'
+        type: choice
+        options:
+          - esp32
+          - esp32s2
+          - esp32s3
+          - esp32c3
+          - esp32c6
+          # 如果需要其他芯片可自行添加
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Build with ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.4
+          target: ${{ github.event.inputs.target || 'esp32' }}
+          path: .
+          command: |
+            # 删除可能存在的旧 sdkconfig，避免目标芯片冲突
+            rm -f sdkconfig
+            # 构建系统会根据 IDF_TARGET 自动生成正确的 sdkconfig
+            idf.py build
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-network-repeater-${{ github.event.inputs.target || 'esp32' }}
+          path: |
+            build/*.bin
+            build/bootloader/*.bin
+            build/partition_table/*.bin
+          if-no-files-found: error
+          retention-days: 7
